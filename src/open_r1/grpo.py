@@ -94,7 +94,7 @@ def accuracy_reward(completions, solution, **kwargs):
 
 def format_reward(completions, **kwargs):
     """Reward function that checks if the completion has a specific format."""
-    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
     completion_contents = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, content) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
@@ -129,31 +129,28 @@ def main(script_args, training_args, model_args):
             ],
         }
 
+    QUESTION_TEMPLATE = "{Question}  Output the thinking process in <think> </think> and final answer (number) in <answer> </answer> tags."
     def make_conversation_image(example):
         return {
             "prompt": [
-                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
                 {
                     "role": "user",
                     "content": [
                         {"type": "image"},
-                        {"type": "text", "text": example["problem"]},
+                        {"type": "text", "text": QUESTION_TEMPLATE.format(Question=example["problem"])},
                     ],
                 },
             ],
         }
 
     if "image" in dataset[script_args.dataset_train_split].features:
-        dataset = dataset.map(make_conversation_image)
-        dataset = dataset.remove_columns(["original_question", "original_answer"])
+        dataset = dataset.map(make_conversation_image)  # Utilize multiprocessing for faster mapping
     else:
         dataset = dataset.map(make_conversation)
         dataset = dataset.remove_columns("messages")
 
-    if "Qwen2-VL" in model_args.model_name_or_path or "Aria" in model_args.model_name_or_path:
-        trainer_cls = Qwen2VLGRPOTrainer
-    else:
-        trainer_cls = GRPOTrainer
+    
+    trainer_cls = Qwen2VLGRPOTrainer
 
     # Initialize the GRPO trainer
     trainer = trainer_cls(
