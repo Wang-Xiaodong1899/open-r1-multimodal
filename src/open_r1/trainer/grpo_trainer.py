@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import os
 import textwrap
 from collections import defaultdict
@@ -44,8 +45,6 @@ from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_c
 from trl.models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
-
-import copy
 
 
 if is_peft_available():
@@ -275,8 +274,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.generation_config = GenerationConfig(
             max_new_tokens=self.max_completion_length,
-            do_sample=True,  
-            temperature=1, # HACK
+            do_sample=True,
+            temperature=1,  # HACK
             num_return_sequences=self.num_generations,
             pad_token_id=pad_token_id,
         )
@@ -355,7 +354,7 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         # Generate completions
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            #prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+            # prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
 
             # Generate N times, each generate one with the temp_generation_config , stack the output_ids to prompt_completion_ids, pad the empty places with number 151613
             num_generations = self.generation_config.num_return_sequences
@@ -367,17 +366,19 @@ class Qwen2VLGRPOTrainer(Trainer):
             for i in range(num_generations):  # -1 because we already have one generation
                 completion = unwrapped_model.generate(**prompt_inputs, generation_config=temp_generation_config)
                 all_completions.append(completion)
-            
+
             # Stack all completions and pad if needed
             max_length = max(completion.size(1) for completion in all_completions)
             padded_completions = []
 
             for completion in all_completions:
                 if completion.size(1) < max_length:
-                    padding = torch.full((completion.size(0), max_length - completion.size(1)), 
-                                    self.processing_class.tokenizer.pad_token_id, 
-                                    dtype=completion.dtype,
-                                    device=completion.device)
+                    padding = torch.full(
+                        (completion.size(0), max_length - completion.size(1)),
+                        self.processing_class.tokenizer.pad_token_id,
+                        dtype=completion.dtype,
+                        device=completion.device,
+                    )
                     padded_completion = torch.cat([completion, padding], dim=1)
                 else:
                     padded_completion = completion
@@ -385,7 +386,7 @@ class Qwen2VLGRPOTrainer(Trainer):
 
             # Stack all padded completions
             prompt_completion_ids = torch.cat(padded_completions, dim=0)
-        
+
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
