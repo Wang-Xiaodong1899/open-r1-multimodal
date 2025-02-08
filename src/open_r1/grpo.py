@@ -14,8 +14,8 @@
 
 import os
 import re
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 from datasets import load_dataset
@@ -69,19 +69,19 @@ def accuracy_reward(completions, solution, **kwargs):
         if reward == 0.0:
             try:
                 # Extract answer from solution if it has think/answer tags
-                sol_match = re.search(r'<answer>(.*?)</answer>', sol)
+                sol_match = re.search(r"<answer>(.*?)</answer>", sol)
                 ground_truth = sol_match.group(1).strip() if sol_match else sol.strip()
-                
+
                 # Extract answer from content if it has think/answer tags
-                content_match = re.search(r'<answer>(.*?)</answer>', content)
+                content_match = re.search(r"<answer>(.*?)</answer>", content)
                 student_answer = content_match.group(1).strip() if content_match else content.strip()
-                
+
                 # Compare the extracted answers
                 if student_answer == ground_truth:
                     reward = 1.0
             except Exception:
                 pass  # Keep reward as 0.0 if both methods fail
-                
+
         rewards.append(reward)
         if os.getenv("DEBUG_MODE") == "true":
             log_path = os.getenv("LOG_PATH")
@@ -130,6 +130,7 @@ def main(script_args, training_args, model_args):
         }
 
     QUESTION_TEMPLATE = "{Question}  Output the thinking process in <think> </think> and final answer (number) in <answer> </answer> tags."
+
     def make_conversation_image(example):
         return {
             "prompt": [
@@ -149,7 +150,6 @@ def main(script_args, training_args, model_args):
         dataset = dataset.map(make_conversation)
         dataset = dataset.remove_columns("messages")
 
-    
     trainer_cls = Qwen2VLGRPOTrainer
 
     # Initialize the GRPO trainer
