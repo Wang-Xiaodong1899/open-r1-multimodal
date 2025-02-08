@@ -390,8 +390,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids):
-            logits = model(input_ids).logits  # (B, L, V)
+        def get_per_token_logps(model, input_ids, **kwargs):
+            logits = model(input_ids, **kwargs).logits  # (B, L, V)
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
             input_ids = input_ids[:, 1:]  # (B, L-1), exclude the first input ID since we don't have logits for it
             # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
@@ -402,7 +402,13 @@ class Qwen2VLGRPOTrainer(Trainer):
                 per_token_logps.append(token_log_prob)
             return torch.stack(per_token_logps)
 
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids)
+        prompt_inputs.pop("input_ids")
+        prompt_inputs.pop("attention_mask")
+        # Okay I am assuming that the inputs are Qwen2VL processor
+        # and no video for now, repeat the image for each completion
+        prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].repeat(len(prompt_completion_ids), 1)
+        prompt_inputs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(len(prompt_completion_ids), 1)
+        per_token_logps = get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
         # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
         per_token_logps = per_token_logps[:, prompt_length - 1 :]
 
