@@ -48,6 +48,10 @@ class GRPOScriptArguments(ScriptArguments):
         default=3136,
         metadata={"help": "Minimum number of pixels for the image"},
     )
+    jsonl_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "json file path"},
+    )
 
 
 def accuracy_reward(completions, solution, **kwargs):
@@ -96,7 +100,7 @@ def format_reward(completions, **kwargs):
     """Reward function that checks if the completion has a specific format."""
     pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
     completion_contents = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, content) for content in completion_contents]
+    matches = [re.match(pattern, content, re.DOTALL) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
 
 
@@ -112,13 +116,26 @@ SYSTEM_PROMPT = (
     "<think> reasoning process here </think><answer> answer here </answer>"
 )
 
+from datasets import Dataset, DatasetDict
+import json
+
+def create_dataset_from_jsonl_simple(jsonl_path):
+    base_dataset = Dataset.from_json(jsonl_path)
+    return DatasetDict({
+        "train": base_dataset
+    })
+
 
 def main(script_args, training_args, model_args):
     # Get reward functions
     reward_funcs = [reward_funcs_registry[func] for func in script_args.reward_funcs]
-
-    # Load the dataset
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    
+    if script_args.jsonl_path:
+        # # load dataset from jsonl
+        dataset = create_dataset_from_jsonl_simple(script_args.jsonl_path)
+    else:
+        # Load the dataset
+        dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     # Format into conversation
     def make_conversation(example):
@@ -129,7 +146,7 @@ def main(script_args, training_args, model_args):
             ],
         }
 
-    QUESTION_TEMPLATE = "{Question}  Output the thinking process in <think> </think> and final answer (number) in <answer> </answer> tags."
+    QUESTION_TEMPLATE = "{Question}  Output the thinking process in <think> </think> and final answer in <answer> </answer> tags."
 
     def make_conversation_image(example):
         return {
@@ -143,12 +160,33 @@ def main(script_args, training_args, model_args):
                 },
             ],
         }
+    
+    def make_conversation_video(example):
+        return {
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "video"},
+                        # {"type": "video", "video": example["video"]},
+                        # {"type": "video", "bytes": open(example["video"],"rb").read()},
+                        {"type": "text", "text": QUESTION_TEMPLATE.format(Question=example["problem"])},
+                    ],
+                },
+            ],
+    }
 
     if "image" in dataset[script_args.dataset_train_split].features:
         dataset = dataset.map(make_conversation_image)  # Utilize multiprocessing for faster mapping
+    elif "video" in dataset[script_args.dataset_train_split].features:
+        dataset = dataset.map(
+            make_conversation_video,
+        )
     else:
         dataset = dataset.map(make_conversation)
         dataset = dataset.remove_columns("messages")
+    
+    # import pdb; pdb.set_trace()
 
     trainer_cls = Qwen2VLGRPOTrainer
 

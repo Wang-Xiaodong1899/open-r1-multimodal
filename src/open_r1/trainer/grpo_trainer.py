@@ -47,6 +47,8 @@ from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 
 
+from qwen_vl_utils import process_vision_info
+
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
@@ -334,13 +336,29 @@ class Qwen2VLGRPOTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
+        
+        # TODO if "video" in inputs sample
+        # import pdb; pdb.set_trace()
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        images = [x["image"] for x in inputs]
+        
+        if "image" in inputs[0]:
+            images = [x["image"] for x in inputs]
+        elif "video" in inputs[0]:
+            videos = [x["video"] for x in inputs]
+            video_inputs = []
+            for (inp_idx, inp) in enumerate(inputs):
+                new_inp = inp.copy()
+                new_inp['prompt'][0]['content'][0]['text'] = inputs[inp_idx]["video"]
+                video_inputs.append(process_vision_info(new_inp["prompt"])[0])
+        
+        # import pdb; pdb.set_trace()
+        
         prompt_inputs = self.processing_class(
             text=prompts_text,
-            images=images,
+            images=images if "image" in inputs[0] else None,
+            videos=video_inputs if "video" in inputs[0] else None,
             return_tensors="pt",
             padding=True,
             padding_side="left",
@@ -390,6 +408,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
+        # import pdb; pdb.set_trace()
+
         # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids, **kwargs):
             logits = model(input_ids, **kwargs).logits  # (B, L, V)
@@ -407,8 +427,20 @@ class Qwen2VLGRPOTrainer(Trainer):
         prompt_inputs.pop("attention_mask")
         # Okay I am assuming that the inputs are Qwen2VL processor
         # and no video for now, repeat the image for each completion
-        prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].repeat(len(prompt_completion_ids), 1)
-        prompt_inputs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(len(prompt_completion_ids), 1)
+        if "image" in inputs[0]:
+            prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].repeat(len(prompt_completion_ids), 1)
+            prompt_inputs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(len(prompt_completion_ids), 1)
+        # import pdb; pdb.set_trace()
+        
+        # XXX if input video
+        # image_grid_thw is from image_process_qwen2_vl
+        # https://github.com/huggingface/transformers/blob/dd16acb8a3e93b643aa374c9fb80749f5235c1a6/src/transformers/models/qwen2_vl/image_processing_qwen2_vl.py#L414
+        # automatic process
+        if "video" in inputs[0]:
+            prompt_inputs["pixel_values_videos"] = prompt_inputs["pixel_values_videos"].repeat(len(prompt_completion_ids), 1)
+            prompt_inputs["video_grid_thw"] = prompt_inputs["video_grid_thw"].repeat(len(prompt_completion_ids), 1)
+        
+        
         per_token_logps = get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
         # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
         per_token_logps = per_token_logps[:, prompt_length - 1 :]
@@ -422,7 +454,10 @@ class Qwen2VLGRPOTrainer(Trainer):
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
 
         # Compute the KL divergence between the model and the reference model
-        per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+        diff = ref_per_token_logps - per_token_logps
+        diff = torch.clamp(diff, min=-11.0, max=11.0) 
+
+        per_token_kl = torch.exp(diff) - (diff) - 1
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
@@ -501,6 +536,8 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+        # import pdb; pdb.set_trace()
 
         return loss
 

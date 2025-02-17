@@ -176,3 +176,7 @@ wandb/
 scripts/
 checkpoints/
 .vscode/
+
+output/
+data/
+lighteval/
